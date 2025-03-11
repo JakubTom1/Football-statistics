@@ -1,0 +1,519 @@
+---
+title: "Football matches statistics"
+author: "Jakub Tomczyk"
+date: "2025-03-04"
+output: 
+  github_document:
+    number_sections: true
+    toc: true
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(tidyverse)
+library("ggplot2")
+theme_set(theme_bw())
+library("sf")
+library("rnaturalearth")
+library("rnaturalearthdata")
+library("leaflet")
+```
+
+# Introduction
+
+The project involved an in-depth analysis of football match statistics for
+national teams. Conclusions from the results of the analysis could be
+used to further predict the results of matches, taking into account
+basic match statistics i.e. the number of goals or the probability of
+ending a match with a penalty shootout.
+
+# Database
+
+[Dataset](https://www.kaggle.com/datasets/martj42/international-football-results-from-1872-to-2017/data)
+used in this project includes 47,917 results of international football
+matches starting from the very first official match in 1872 up to 2024.
+
+```{r cars, collapse = TRUE}
+shootouts = read.csv("csv/shootouts.csv")
+results = read.csv("csv/results.csv")
+goalscorers = read.csv("csv/goalscorers.csv")
+former_names = read.csv("csv/former_names.csv")
+```
+
+# Data cleaning
+
+The data used was clean and did not have the wrong format data. For
+correct visualization, it was necessary to change the naming of some
+countries ensuring compatibility with the format available in libraries.
+
+# Data Analysis
+
+The data analysis process consisted of querying the dataset and
+visualizing the relationships present to make further conclusions
+
+## How often the home team wins?
+
+Querying the table of historical match results to determine the ratio of
+matches won by the home team to the total number of matches played. The
+result allows to infer the probability of victory of the home team in
+future matches
+
+```{r}
+not_neutral_match <- results %>%
+  filter(!neutral)
+home_win<- not_neutral_match %>%
+  filter(home_score > away_score)
+
+home_win_ratio <- nrow(home_win)/nrow(not_neutral_match)
+print(home_win_ratio)
+```
+
+### Conlusion
+
+The result indicates that the home team is slightly more likely to win.
+
+## What is the ratio of home gaols to away goals?
+
+The result of an inquiry into the ratio of home to away goals makes it
+possible to infer the likely ratio of goals in upcoming matches.
+
+```{r}
+score_ratio <- not_neutral_match %>%
+  summarise(score_ratio = sum(home_score, na.rm = TRUE) / sum(away_score, na.rm = TRUE))
+print(score_ratio)
+```
+
+### Conlusion
+
+Based on historical data, we can see that by far the more frequent goals
+are scored by the home team.
+
+## What are the historical match statistics for each national team?
+
+Visualization of historical match statistics shows how often the
+featured teams score, win or lose. Score analysis allows you to predict
+the approximate number of goals in upcoming matches and their predicted
+outcome.
+
+```{r}
+team_wins <- results %>%
+  mutate(
+    home_win = ifelse(home_score > away_score, home_team, NA), 
+    away_win = ifelse(away_score > home_score, away_team, NA)
+  ) %>%
+  select(home_win, away_win) %>%
+  pivot_longer(cols = everything(), values_drop_na = TRUE, values_to = "team") %>%  
+  count(team, name = "wins") %>%
+  full_join(
+    results %>%
+      mutate(
+        home_loss = ifelse(home_score < away_score, home_team, NA), 
+        away_loss = ifelse(away_score < home_score, away_team, NA)
+      ) %>%
+      select(home_loss, away_loss) %>%
+      pivot_longer(cols = everything(), values_drop_na = TRUE, values_to = "team") %>%
+      count(team, name = "losses"),
+    by = "team"
+  ) %>%
+  full_join(
+    results %>%
+      mutate(
+        draw_home = ifelse(home_score == away_score, home_team, NA),
+        draw_away = ifelse(home_score == away_score, away_team, NA)
+      ) %>%
+      select(draw_home, draw_away) %>%
+      pivot_longer(cols = everything(), values_drop_na = TRUE, values_to = "team") %>%
+      count(team, name = "draws"),
+    by = "team"
+  ) %>%
+  full_join(
+    results %>%
+      pivot_longer(cols = c(home_team, away_team), names_to = "match_type", values_to = "team") %>%
+      count(team, name = "matches_played"),
+    by = "team"
+  ) %>%
+  full_join(
+    results %>%
+      pivot_longer(cols = c(home_team, away_team, home_score, away_score), 
+                   names_to = c("type", ".value"),
+                   names_sep = "_") %>%
+      group_by(team) %>%
+      summarise(average_goals = mean(score, na.rm = TRUE), .groups = "drop"),
+    by = "team"
+  ) %>%
+  mutate(win_ratio = wins/matches_played, loss_ratio = losses/matches_played, draw_ratio = draws/matches_played)%>%
+  arrange(desc(matches_played)) %>%
+  mutate(
+    team = case_when(
+      team == "China PR" ~ "China",
+      team == "United States" ~ "United States of America",
+      team == "United States Virgin Islands" ~ "U.S. Virgin Islands",
+      team == "DR Congo" ~ "Dem. Rep. Congo",
+      team == "Central African Republic" ~ "Central African Rep.",
+      team == "Ivory Coast" ~ "Côte d'Ivoire",
+      team == "Czech Republic" ~ "Czechia",
+      team == "Bosnia and Herzegovina" ~ "Bosnia and Herz.",
+      team == "Dominican Republic" ~ "Dominican Rep.",
+      team == "Antigua and Barbuda" ~ "Antigua and Barb.",
+      team == "British Virgin Islands" ~ "British Virgin Is.",
+      team == "Equatorial Guinea" ~ "Eq. Guinea",
+      team == "Eswatini" ~ "eSwatini",
+      team == "Republic of Ireland" ~ "Ireland",
+      team == "Faroe Islands" ~ "Faeroe",
+      team == "Åland Islands" ~ "Åland",
+      team == "Falkland Islands" ~ "Falkland Is.",
+      team == "Saint Kitts and Nevis" ~ "St. Kitts and Nevis",
+      team == "S. Geo. and the Is." ~ "St. Vin. and Gren.",
+      team == "Cape Verde" ~ "Cabo Verde",
+      team == "São Tomé and Príncipe" ~ "São Tomé and Principe",
+      team == "Solomon Islands" ~ "Solomon Is.",
+      TRUE ~ team  # Pozostawienie innych nazw bez zmian
+    )
+  ) 
+
+print(team_wins)
+
+write.csv(team_wins, "team_wins.csv")
+```
+
+### Visualization of top team statistics
+
+For a better presentation of match statistics, charts showing the basic
+relationships in match results were used.
+
+```{r}
+top_teams <- team_wins %>%
+  head(30)
+
+top_teams_long <- top_teams %>%
+  pivot_longer(cols = c("wins", "losses", "draws"),  # Kolumny do przekształcenia
+               names_to = "type", 
+               values_to = "number")
+
+average_goals_overall <- mean(team_wins$average_goals, na.rm = TRUE)
+
+best_win_ratio_teams <- team_wins %>%
+  filter(matches_played>500) %>%
+  select(team, win_ratio) %>%
+  arrange(desc(win_ratio)) %>% 
+  head(30)
+
+more_than_500_teams <- team_wins %>%
+  filter(matches_played>500)
+average_win_ratio <- mean(more_than_500_teams$win_ratio, na.rm = TRUE)
+
+
+write.csv(top_teams, "to_teams.csv")
+write.csv(best_win_ratio_teams, "best_win_ratio_teams.csv")
+write.csv(more_than_500_teams, "more_than_500_teams.csv")
+
+
+
+ggplot(top_teams_long, aes(x = team, y = number, fill = type)) +
+  geom_bar(stat = "identity", position = "stack") +  # "dodge" ustawia słupki obok siebie
+  labs(title = "Statistics for most often playing teams",
+       x = "Team", y = "Number of matches") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size=7,angle = 60, hjust = 1))
+```
+
+```{r}
+ggplot(top_teams, aes(x = team, y = average_goals)) +
+  geom_bar(stat = "identity", fill='blue', alpha=0.8) +
+  geom_hline(aes(yintercept = average_goals_overall, linetype = "Average goals ratio \nof all teams"),color = "red", linewidth = 1) + 
+  scale_linetype_manual(name = "Legend", values = c("Average goals ratio \nof all teams" = "dashed"))+ 
+  labs(title = "Average goals per match",
+       subtitle = "For most often played teams",
+       x = "Team",
+       y = "Goal ratio") +
+  theme_minimal()+
+  theme(axis.text.x = element_text(size=7,angle = 60, hjust = 1))
+```
+
+```{r}
+ggplot(best_win_ratio_teams, aes(x = team, y = win_ratio)) +
+  geom_bar(stat = "identity", fill='blue', alpha=0.8) +
+   geom_hline(aes(yintercept = average_win_ratio, linetype = "Average win ratio \nof teams played more \nthan 500 matches"),color = "red", linewidth = 1) + 
+  scale_linetype_manual(name = "Legend", values = c("Average win ratio \nof teams played more \nthan 500 matches" = "dashed"))+ 
+  labs(title = "Top 30 best teams",
+       subtitle = "Played more than 500 matches",
+       x = "Team",
+       y = "Win_ratio") +
+  theme_minimal()+
+  guides(shape=none)+
+  theme(axis.text.x = element_text(size=7,angle = 60, hjust = 1))
+
+```
+
+```{r}
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+
+world_data <- world %>%
+  left_join(team_wins, by = c("name" = "team"))
+
+leaflet(data = world_data) %>%
+  addTiles() %>%
+  addPolygons(
+    fillColor = ~colorNumeric("GnBu", matches_played, na.color = "gray80")(matches_played),
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.8,
+    label = ~paste0(name, ": ", round(matches_played, 2), " matches played"),
+    highlightOptions = highlightOptions(color = "white", weight = 2, bringToFront = TRUE)
+  ) %>%
+  addLegend(pal = colorNumeric("GnBu", world_data$matches_played, na.color = "gray80"),
+            values = world_data$matches_played,
+            title = "Number of matches played",
+            position = "bottomright")
+```
+
+```{r}
+leaflet(data = world_data) %>%
+  addTiles() %>%
+  addPolygons(
+    fillColor = ~colorNumeric("YlOrRd", average_goals, na.color = "gray80")(average_goals),
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.8,
+    label = ~paste0(name, ": ", round(average_goals, 2), " goals per match"),
+    highlightOptions = highlightOptions(color = "white", weight = 2, bringToFront = TRUE)
+  ) %>%
+  addLegend(pal = colorNumeric("YlOrRd", world_data$average_goals, na.color = "gray80"),
+            values = world_data$average_goals,
+            title = "Avg Goals per Match",
+            position = "bottomright")
+
+```
+
+```{r}
+leaflet(data = world_data) %>%
+  addTiles() %>%
+  addPolygons(
+    fillColor = ~colorNumeric("YlGn", win_ratio, na.color = "gray80")(win_ratio),
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.8,
+    label = ~paste0(name, ": ", round(win_ratio, 3)*100, "% wins;\n",
+                                round(loss_ratio, 3)*100, "% losss;\n",
+                                round(draw_ratio, 3)*100, "% draws;\n"),
+    highlightOptions = highlightOptions(color = "white", weight = 2, bringToFront = TRUE)
+  ) %>%
+  addLegend(pal = colorNumeric("YlGn", world_data$win_ratio, na.color = "gray80"),
+            values = world_data$win_ratio,
+            title = "Win ratio for each country",
+            position = "bottomright")
+```
+
+### Conclusion
+
+The statistics presented show that European and South American countries
+most often play football matches. The national teams of these countries
+also score most often and are characterized by a high ratio of wins to
+losses.
+
+It is very difficult to present general conclusions from the charts
+presented. However, it may be helpful to compare basic statistics for
+selected national teams about to play a match against each other.
+
+## Which teams are most likely to end a match with a penalty shootout tournament?
+
+The statistics of penalty shootout tournaments show the probability of a
+match ending in a series of penalty shootouts by a given team and help
+predict their most likely winner.
+
+```{r}
+matches_with_shootouts <- results %>%
+  select(date, home_team, away_team) %>%
+  left_join(shootouts %>% select(date, home_team, away_team, winner), 
+            by = c("date", "home_team", "away_team")) %>%
+  rename(shootouts_winner = winner) %>%
+  mutate(participated = ifelse(!is.na(shootouts_winner), 1, 0)) %>%
+  pivot_longer(cols = c(home_team, away_team), names_to = "match_type", values_to = "team") %>%
+  group_by(team) %>%
+  summarise(
+    shootouts_wins = sum(shootouts_winner == team, na.rm = TRUE),  
+    shootouts_participated = sum(participated, na.rm = TRUE),  
+    win_ratio = shootouts_wins / shootouts_participated,  
+    shootouts_ratio = shootouts_participated / n() 
+  )%>%
+  arrange(desc(win_ratio)) %>%
+  mutate(
+    team = case_when(
+      team == "China PR" ~ "China",
+      team == "United States" ~ "United States of America",
+      team == "United States Virgin Islands" ~ "U.S. Virgin Islands",
+      team == "DR Congo" ~ "Dem. Rep. Congo",
+      team == "Central African Republic" ~ "Central African Rep.",
+      team == "Ivory Coast" ~ "Côte d'Ivoire",
+      team == "Czech Republic" ~ "Czechia",
+      team == "Bosnia and Herzegovina" ~ "Bosnia and Herz.",
+      team == "Dominican Republic" ~ "Dominican Rep.",
+      team == "Antigua and Barbuda" ~ "Antigua and Barb.",
+      team == "British Virgin Islands" ~ "British Virgin Is.",
+      team == "Equatorial Guinea" ~ "Eq. Guinea",
+      team == "Eswatini" ~ "eSwatini",
+      team == "Republic of Ireland" ~ "Ireland",
+      team == "Faroe Islands" ~ "Faeroe",
+      team == "Åland Islands" ~ "Åland",
+      team == "Falkland Islands" ~ "Falkland Is.",
+      team == "Saint Kitts and Nevis" ~ "St. Kitts and Nevis",
+      team == "S. Geo. and the Is." ~ "St. Vin. and Gren.",
+      team == "Cape Verde" ~ "Cabo Verde",
+      team == "São Tomé and Príncipe" ~ "São Tomé and Principe",
+      team == "Solomon Islands" ~ "Solomon Is.",
+      TRUE ~ team  # Pozostawienie innych nazw bez zmian
+    )
+  ) 
+
+print(matches_with_shootouts)
+write.csv(team_wins, "matches_with_shootouts.csv")
+```
+
+```{r}
+world_shootouts <- world %>%
+  left_join(matches_with_shootouts, by = c("name" = "team"))
+
+leaflet(data = world_shootouts) %>%
+  addTiles() %>%
+  addPolygons(
+    fillColor = ~colorNumeric("GnBu", shootouts_ratio, na.color = "gray80")(shootouts_ratio),
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.8,
+    label = ~paste0(name, ": ", round(shootouts_ratio, 4) * 100, "% matches was shootouts;\n",
+                                round(win_ratio * 100, 2), "% shootouts won"),
+    highlightOptions = highlightOptions(color = "white", weight = 2, bringToFront = TRUE)
+  ) %>%
+  addLegend(
+    pal = colorNumeric("GnBu", world_shootouts$shootouts_ratio, na.color = "gray80"),
+    values = world_shootouts$shootouts_ratio,
+    title = "Percent of matches ended with shootouts",
+    position = "bottomright"
+  )
+
+```
+
+### Conclusion
+
+African teams are most often involved in penalty kicks. By far the most
+common participant is the South African team.
+
+## Who are top 100 goalscorers of all time?
+
+Analysis of top scorer data allows you to predict who might be the goal
+scorer in the upcoming match. However, this statistic does not take into
+account the age of the players and information about whether the player
+has already completed his career.
+
+```{r}
+best_goalscorers <- goalscorers %>%
+  filter(!own_goal) %>%
+  group_by(scorer, team) %>%
+  summarise(number_of_goals = n(),.groups = "drop") %>%
+  rename(scoring_team = team) %>%
+  arrange(desc(number_of_goals)) %>%
+  head(100)
+print(best_goalscorers)
+write.csv(team_wins, "best_goalscorers.csv")
+```
+
+The data presented, due to its nature, cannot be a source of inference
+about goal scorers. Everything depends on the current predisposition and
+form of the player.
+
+## When goals are most often scored?
+
+Statistics on goals scored in the intervals allow you to predict when
+similar goals will be scored in the following matches. Statistics about
+the teams that scored the most goals in these intervals are purely
+informative and depend on the total number of matches played by each
+national team.
+
+```{r}
+best_time_to_shoot <- goalscorers %>%
+  mutate(minute_bin = cut(minute, breaks = seq(0, 125, by = 5), include.lowest = TRUE, right = FALSE)) %>%
+  group_by(team, minute_bin) %>%
+  summarise(goals = n(), .groups = "drop") %>%
+  group_by(minute_bin) %>%
+  mutate(total_goals_in_bin = sum(goals)) %>%
+  slice_max(goals, n = 1, with_ties = FALSE) %>%
+  arrange(desc(minute_bin))
+print(best_time_to_shoot)
+write.csv(team_wins, "best_time_to_shoot.csv")
+```
+
+```{r}
+
+minutes_goals <- goalscorers %>%
+  group_by(minute) %>%
+  summarise(goals = n(), .groups = "drop") 
+print(minutes_goals)
+
+ggplot(minutes_goals , aes(x = minute, y = goals)) +
+  geom_col(fill = "blue", color = "black", alpha=0.8) +
+  scale_x_continuous(breaks = seq(0, 125, by = 10), 
+                     minor_breaks = seq(0, 125, by = 5)) +
+  scale_y_continuous(breaks = seq(0, 1800, by = 100), 
+                     minor_breaks = seq(0, 1800, by = 50))+
+  labs(title = "Goals per Minute", x = "Minute", y = "Number of Goals") +
+  theme_minimal()
+
+ 
+```
+
+### Conclusion
+
+Interval goal statistics show that most goals fall in the second half of
+a match. There is a particular increase in the number of goals at the
+end of each half of the match (by taking into account the added playing
+time). The fewest goals fall in the first minutes of the match.
+
+## How the number of games and the number of goals per game have changed over the years?
+
+Occurring trends in goal count statistics can indicate how many goals
+may fall during a match. Combining this statistic with the average
+number of goals of each team can help predict the results of matches.
+
+```{r}
+goal_distribution_in_years <- results %>%
+  mutate(decade = paste0(floor(year(as.Date(date)) / 10) * 10, "s")) %>%
+  group_by(decade) %>%
+  summarise(total_goals = sum(home_score+away_score), .groups = "drop",
+            total_matches = n(),
+            goal_ratio = total_goals/total_matches) %>%
+  arrange(decade)
+
+print(goal_distribution_in_years)
+write.csv(team_wins, "goal_distribution_in_years.csv")
+
+```
+
+```{r}
+ggplot(goal_distribution_in_years, aes(x = decade, y = goal_ratio)) +
+  geom_point(size = 3, color = "blue") +  # Punkty na wykresie
+  geom_segment(aes(
+    xend = lead(decade),  # lead() zamiast tail() dla przesunięcia do przodu
+    yend = lead(goal_ratio)
+  ), color = "red", size = 1) +  # Linie łączące punkty
+  labs(title = "Goals per decade",
+       x = "Decade",
+       y = "Goal ratio") +
+  theme_minimal()
+```
+
+### Conlusion
+
+Change in the number of goals over the decades shows that goals are
+scored less and less frequently and the number of goals pergame is
+declining. Despite this, for more than 30 years the average number of
+goals has changed only slightly, fluctuating around 2.7 goals per game.
+
+
+# Summary
+
+The analyses presented here provide information on trends in football, able to serve bookmakers in predicting match results. For example: statistics on the distribution of the number of goals scored per minute allow predicting the most likely moments to score a goal. However, these statistics do not take into account important information about the current form of each national team, along with their style of play and coach. Each national team changes its players, having better and worse periods, which are not included in the analysis presented here.
